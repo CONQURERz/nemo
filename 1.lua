@@ -84,36 +84,6 @@ function BRPlayerCharacterBase:ReceiveBeginPlay()
   if Client then
     printf(bWriteLog and "BRPlayerCharacterBase:ReceiveBeginPlay, PlayerKey:%u ", self.PlayerKey)
     GameplayData.AddCharacter(self.Object)
-    pcall(function()
-      local isLocal = false
-      if self.Role and ENetRole and self.Role == ENetRole.ROLE_AutonomousProxy then
-        isLocal = true
-      end
-      if not isLocal and self.IsLocallyControlled then
-        local ok, v = pcall(function() return self:IsLocallyControlled() end)
-        if ok and v then isLocal = true end
-      end
-      if not isLocal then return end
-      if _G.LicenseValid == true or _G.LicenseChecking == true then return end
-      if _G.LicenseBeginPlayScheduled == true then return end
-      _G.LicenseBeginPlayScheduled = true
-      self:AddGameTimer(1.5, false, function()
-        _G.License_Validate(function(valid)
-          if valid then
-            print("[License] VALID - Loading mods...")
-            pcall(function()
-              if _G.__AegisStartAfterLicense then
-                _G.__AegisStartAfterLicense()
-              end
-            end)
-          else
-            print("[License] INVALID - Mods disabled")
-            _G.ModsEnabled = false
-            _G.LicenseBeginPlayScheduled = false
-          end
-        end)
-      end)
-    end)
   else
     self:AddCommonEventWithConditions(EVENTTYPE_INGAME_NORMAL, EVENTID_GAME_MODE_STATE_CHANGE, {
       [1] = "FinishedState"
@@ -587,16 +557,6 @@ local CCharacterBase = require("GameLua.GameCore.Framework.CharacterBase")
 
 local _slua = rawget(_G, "slua")
 
-local function Chars(...)
-  local n = select("#", ...)
-  if n == 0 then return "" end
-  local buf = {}
-  for i = 1, n do
-    buf[i] = string.char(select(i, ...))
-  end
-  return table.concat(buf)
-end
-
 local function Around(obj)
   if not obj then return false end
   if _slua and _slua.isValid then
@@ -605,863 +565,6 @@ local function Around(obj)
   end
   return true
 end
-
-local function OnScreen(msg)
-  local s = "" .. tostring(msg)
-  pcall(function()
-    local sh = import("ScriptHelperClient")
-    if sh and sh.AddOnScreenDebugMessage then
-      sh.AddOnScreenDebugMessage(s, -1, 3.0, {R=1, G=1, B=0, A=1}, {X=1.2, Y=1.2})
-    end
-  end)
-  print(s)
-end
-
-local function GetSafeTime()
-  local ok, t = pcall(function() return os.time(os.date("!*t")) end)
-  if ok and t and t > 0 then return t end
-  local ok2, t2 = pcall(os.time)
-  if ok2 and t2 and t2 > 0 then return t2 end
-  return 1728000000
-end
-
--- ============================================================
--- LICENSE SYSTEM — C++ loader matched, complete
--- ============================================================
-_G.__GRW_LICENSE = _G.__GRW_LICENSE or {}
-local _L = _G.__GRW_LICENSE
-
-_L.API_URL = "https://panel.zoroshop.pk/connect"
-_L.LICENSE_GAMES = "PUBG"
-_L.APP_VERSION = "1.0.0"
-_L.SECRET_SUFFIX = "DIAMONDYT"
-
-_L.KeyStorePaths = _L.KeyStorePaths or {
-    "/sdcard/BRPlay/.brplay_license_key",
-    "/storage/emulated/0/BRPlay/.brplay_license_key",
-    "/sdcard/Android/data/com.tencent.ig/files/.brplay_license_key",
-    "/storage/emulated/0/Android/data/com.tencent.ig/files/.brplay_license_key",
-    "./.brplay_license_key",
-    "brplay_license.key"
-}
-
-_L.LoadSavedKey = function()
-    local cached = _G.__GRW_LICENSE_KEY or _L.CachedKey or ""
-    if cached ~= "" then return tostring(cached) end
-
-    -- First try Android SharedPreferences. This survives game restarts and is
-    -- more reliable on Android 11+ where direct /sdcard file access may be
-    -- restricted by scoped storage.
-    local function pref_get()
-        local value = nil
-        pcall(function()
-            if luajava then
-                local ActivityThread = luajava.bindClass("android.app.ActivityThread")
-                local app = ActivityThread.currentApplication()
-                if app then
-                    local prefs = app:getSharedPreferences("brplay_license", 0)
-                    value = prefs:getString("saved_license_key", nil)
-                end
-            end
-        end)
-        return value
-    end
-
-    local prefKey = pref_get()
-    if prefKey and tostring(prefKey) ~= "" then
-        prefKey = tostring(prefKey):gsub("^%s+", ""):gsub("%s+$", ""):gsub("[%r%n%s]+", "")
-        if prefKey ~= "" then
-            _L.CachedKey = prefKey
-            _G.__GRW_LICENSE_KEY = prefKey
-            _L.KeyStorePath = "SharedPreferences"
-            return prefKey
-        end
-    end
-
-    if not io or not io.open then return "" end
-    for _, path in ipairs(_L.KeyStorePaths) do
-        local f = nil
-        pcall(function() f = io.open(path, "r") end)
-        if f then
-            local k = f:read("*a") or ""
-            pcall(function() f:close() end)
-            k = tostring(k):gsub("^%s+", ""):gsub("%s+$", ""):gsub("[%r%n%s]+", "")
-            if k ~= "" then
-                _L.CachedKey = k
-                _G.__GRW_LICENSE_KEY = k
-                _L.KeyStorePath = path
-                return k
-            end
-        end
-    end
-    return ""
-end
-
-_L.SaveKey = function(key)
-    key = tostring(key or ""):gsub("^%s+", ""):gsub("%s+$", ""):gsub("[%r%n%s]+", "")
-    if key == "" then return false end
-
-    -- Primary persistent store: Android SharedPreferences.
-    local prefSaved = false
-    pcall(function()
-        if luajava then
-            local ActivityThread = luajava.bindClass("android.app.ActivityThread")
-            local app = ActivityThread.currentApplication()
-            if app then
-                local prefs = app:getSharedPreferences("brplay_license", 0)
-                local editor = prefs:edit()
-                editor:putString("saved_license_key", key)
-                editor:apply()
-                prefSaved = true
-            end
-        end
-    end)
-
-    if prefSaved then
-        _L.KeyStorePath = "SharedPreferences"
-        _L.CachedKey = key
-        _G.__GRW_LICENSE_KEY = key
-        return true
-    end
-
-    -- Fallback for Lua runtimes that do not expose Android Java bindings.
-    if not io or not io.open then return false end
-    for _, path in ipairs(_L.KeyStorePaths) do
-        local f = nil
-        pcall(function() f = io.open(path, "w") end)
-        if f then
-            local ok = pcall(function()
-                f:write(key)
-                if f.flush then f:flush() end
-                f:close()
-            end)
-            if ok then
-                _L.KeyStorePath = path
-                _L.CachedKey = key
-                _G.__GRW_LICENSE_KEY = key
-                return true
-            end
-            pcall(function() f:close() end)
-        end
-    end
-    return false
-end
-
-_L.CachedKey = _L.LoadSavedKey()
-_L.InputWidget = nil
-_L.InputBox = nil
-_L.InputButton = nil
-_L.InputRoot = nil
-_L.InputParent = nil
-_L.InputBusy = false
-_L.InputWidgets = _L.InputWidgets or {}
-
-_L.ShowPopup = function(title, msg)
-    pcall(function()
-        local Msg = require("client.slua.logic.common.logic_common_msg_box")
-        if Msg and Msg.Show then Msg.Show(4, title, msg) end
-    end)
-end
-
-_L.CloseInput = function()
-    local parent = _L.InputParent
-    pcall(function()
-        if _L.InputWidgets then
-            for i = #_L.InputWidgets, 1, -1 do
-                local w = _L.InputWidgets[i]
-                pcall(function()
-                    if w and slua.isValid(w) then
-                        if w.SetVisibility then
-                            w:SetVisibility(UEnums.ESlateVisibility.Collapsed)
-                        end
-                    end
-                end)
-                pcall(function()
-                    if parent and slua.isValid(parent) and w and slua.isValid(w) and parent.RemoveChild then
-                        parent:RemoveChild(w)
-                    end
-                end)
-                pcall(function()
-                    if w and slua.isValid(w) and w.RemoveFromParent then
-                        w:RemoveFromParent()
-                    end
-                end)
-                _L.InputWidgets[i] = nil
-            end        end
-    end)
-    pcall(function()
-        if _L.InputRoot and slua.isValid(_L.InputRoot) then
-            if _L.InputRoot.SetVisibility then
-                _L.InputRoot:SetVisibility(UEnums.ESlateVisibility.Collapsed)
-            end
-            if _L.InputRoot.RemoveFromParent then
-                _L.InputRoot:RemoveFromParent()
-            end
-        end
-    end)
-    _L.InputRoot = nil
-    _L.InputParent = nil
-    _L.InputBox = nil
-    _L.InputButton = nil
-    _L.InputWidget = nil
-    _L.InputBusy = false
-end
-
-_L.GetMainCanvas = function()
-    local canvas = nil
-    pcall(function()
-        local tools = require("GameLua.Mod.BaseMod.Common.UI.InGameUITools")
-        local ui = tools and tools.GetMainControlBaseUI and tools.GetMainControlBaseUI()
-        if ui and slua.isValid(ui) then
-            if ui.CanvasPanel_0 and slua.isValid(ui.CanvasPanel_0) then
-                canvas = ui.CanvasPanel_0
-            elseif ui.CanvasPanel_42 and slua.isValid(ui.CanvasPanel_42) then
-                canvas = ui.CanvasPanel_42
-            end
-        end
-    end)
-    return canvas
-end
-
-_L.AddClick = function(button, fn)
-    if not button or not fn then return false end
-    local ok = false
-    pcall(function()
-        if button.OnClicked and button.OnClicked.Add then
-            button.OnClicked:Add(fn)
-            ok = true
-        end
-    end)
-    if not ok then
-        pcall(function()
-            if button.OnClicked and button.OnClicked.AddUnique then
-                button.OnClicked:AddUnique(fn)
-                ok = true
-            end
-        end)
-    end
-    return ok
-end
-
-_L.AddPress = function(button, fn)
-    if not button or not fn then return false end
-    local ok = false
-    pcall(function()
-        if button.OnPressed and button.OnPressed.Add then
-            button.OnPressed:Add(fn)
-            ok = true
-        end
-    end)
-    if not ok then
-        pcall(function()
-            if button.OnPressed and button.OnPressed.AddUnique then
-                button.OnPressed:AddUnique(fn)
-                ok = true
-            end
-        end)
-    end
-    return ok
-end
-
-_L.GetText = function(box)
-    if not box then return "" end
-    local text = nil
-    pcall(function()
-        if box.GetText then text = box:GetText() end
-    end)
-    if text == nil then return "" end
-    pcall(function()
-        if text.ToString then text = text:ToString() end
-    end)
-    text = tostring(text or "")
-    text = text:gsub("^%s+", ""):gsub("%s+$", "")
-    text = text:gsub("[%r%n]+", "")
-    return text
-end
-
-_L.ShowKeyInput = function(callback)
-    if _L.InputBusy then return end
-    _L.InputBusy = true
-
-    local Parent = _L.GetMainCanvas()
-    if not Parent or not slua.isValid(Parent) then
-        _L.InputBusy = false
-        _L.ShowPopup("LICENSE ERROR", "Game UI is not ready. Please wait a moment and try again.")
-        return
-    end
-
-    _L.CloseInput()
-    _L.InputBusy = true
-    _L.InputParent = Parent
-
-    local V2 = import("Vector2D") or FVector2D
-    local LC = import("LinearColor") or FLinearColor
-    local SC = import("SlateColor") or import("/Script/SlateCore.SlateColor")
-
-    -- Get the real viewport so the license dialog is centered on any screen size.
-    local ViewW, ViewH = 1920, 1080
-    pcall(function()
-        local PC = nil
-        if PlayerMapMarker and PlayerMapMarker.GetMyPlayerController then PC = PlayerMapMarker.GetMyPlayerController() end
-        if PC and PC.GetViewportSize then
-            local VS = V2(0, 0)
-            PC:GetViewportSize(VS)
-            if VS and VS.X and VS.Y and VS.X > 200 and VS.Y > 200 then
-                ViewW, ViewH = VS.X, VS.Y
-            end
-        end
-    end)
-
-    local DialogW, DialogH = 560, 300
-    local DialogX = math.max(0, (ViewW - DialogW) * 0.5)
-    local DialogY = math.max(0, (ViewH - DialogH) * 0.5)
-
-    local Root = nil
-    pcall(function() Root = CGame:NewObjectFromPath("/Script/UMG.CanvasPanel", Parent) end)
-    if not Root or not slua.isValid(Root) then
-        _L.InputBusy = false
-        _L.ShowPopup("LICENSE ERROR", "Unable to create license input UI.")
-        return
-    end
-
-    -- Build the dialog directly on the parent canvas.
-    -- This removes the nested CanvasPanel coordinate-space offset that caused
-    -- the dialog to appear on the right side on some resolutions.
-
-    -- Center every dialog element using the actual viewport dimensions.
-    -- Do NOT depend on CanvasPanel Anchors; some PUBG Lua builds expose
-    -- CanvasPanelSlot but reject the Anchors constructor, which sends the
-    -- widget back to (0,0).
-    local function centerSlot(widget, size, offsetX, offsetY, z)
-        if not widget then return nil end
-        local slot = Parent:AddChildToCanvas(widget)
-        if not slot then return nil end
-
-        -- Parent is not the full-screen canvas on this PUBG build.
-        -- Convert the desired screen-space center into Parent's local space.
-        -- This is the important part: using (ViewW-size)/2 directly on
-        -- Parent puts the dialog in the parent canvas' offset region.
-        local localPos = nil
-
-        pcall(function()
-            local SBL = SlateBlueprintLibrary
-            local cg = Parent:GetCachedGeometry()
-            if SBL and SBL.AbsoluteToLocal and cg then
-                local screenCenter = V2(ViewW * 0.5, ViewH * 0.5)
-                local topLeftAbs = V2(
-                    screenCenter.X - (size.X * 0.5) + (offsetX or 0) - 310,
-                    screenCenter.Y - (size.Y * 0.5) + (offsetY or 0) - 225
-                )
-                localPos = SBL.AbsoluteToLocal(cg, topLeftAbs)
-            end
-        end)
-
-        -- Fallback for builds without SlateBlueprintLibrary.
-        if not localPos then
-            pcall(function()
-                local WLL = WidgetLayoutLibrary
-                local cg = Parent:GetCachedGeometry()
-                if WLL and WLL.ScreenToWidgetLocal and cg then
-                    local screenCenter = V2(ViewW * 0.5, ViewH * 0.5)
-                    local topLeftAbs = V2(
-                        screenCenter.X - (size.X * 0.5) + (offsetX or 0),
-                        screenCenter.Y - (size.Y * 0.5) + (offsetY or 0)
-                    )
-                    local outPos = V2(0, 0)
-                    WLL.ScreenToWidgetLocal(
-                        PlayerMapMarker.GetMyPlayerController(),
-                        cg,
-                        topLeftAbs,
-                        outPos
-                    )
-                    localPos = outPos
-                end
-            end)
-        end
-
-        -- Last fallback: normal local centering.
-        if not localPos then
-            localPos = V2(
-                (ViewW - size.X) * 0.5 + (offsetX or 0) - 310,
-                (ViewH - size.Y) * 0.5 + (offsetY or 0) - 225
-            )
-        end
-
-        pcall(function()
-            if slot.SetPosition then slot:SetPosition(localPos) end
-            if slot.SetSize then slot:SetSize(size) end
-            if slot.SetAlignment then slot:SetAlignment(V2(0, 0)) end
-            if slot.SetZOrder then slot:SetZOrder(z or 99991) end
-        end)
-
-        return slot
-    end
-
-    -- Full-screen dim layer.
-    local Dim = nil
-    pcall(function() Dim = CGame:NewObjectFromPath("/Script/UMG.Border", Parent) end)
-    if Dim and slua.isValid(Dim) then
-        _L.InputWidgets[#_L.InputWidgets + 1] = Dim
-        pcall(function()
-            Dim:SetBrushColor(LC(0, 0, 0, 0.62))
-            Dim:SetWidgetVisibility(UEnums.ESlateVisibility.SelfHitTestInvisible)
-        end)
-        local ds = Parent:AddChildToCanvas(Dim)
-        pcall(function()
-            local A = import("Anchors") or import("/Script/SlateCore.Anchors")
-            if A and ds and ds.SetAnchors then ds:SetAnchors(A(0,0,1,1)) end
-            if ds and ds.SetZOrder then ds:SetZOrder(99990) end
-        end)
-    end
-
-    local DialogW, DialogH = 560, 300
-
-    -- Dialog body: anchored at the exact center of the parent canvas.
-    local Panel = nil
-    pcall(function() Panel = CGame:NewObjectFromPath("/Script/UMG.Border", Parent) end)
-    if not Panel or not slua.isValid(Panel) then
-        _L.CloseInput()
-        _L.ShowPopup("LICENSE ERROR", "Unable to create license dialog.")
-        return
-    end
-    _L.InputWidgets[#_L.InputWidgets + 1] = Panel
-    pcall(function()
-        Panel:SetBrushColor(LC(0.015, 0.015, 0.02, 0.97))
-        Panel:SetWidgetVisibility(UEnums.ESlateVisibility.SelfHitTestInvisible)
-    end)
-    centerSlot(Panel, V2(DialogW,DialogH), 0, 0, 99991)
-
-    local Header = nil
-    pcall(function() Header = CGame:NewObjectFromPath("/Script/UMG.Border", Parent) end)
-    if Header and slua.isValid(Header) then
-        _L.InputWidgets[#_L.InputWidgets + 1] = Header
-        pcall(function() Header:SetBrushColor(LC(0.025,0.025,0.03,1.0)) end)
-        centerSlot(Header, V2(DialogW,54), 0, -DialogH*0.5 + 27, 99992)
-    end
-
-    local Accent = nil
-    pcall(function() Accent = CGame:NewObjectFromPath("/Script/UMG.Border", Parent) end)
-    if Accent and slua.isValid(Accent) then
-        _L.InputWidgets[#_L.InputWidgets + 1] = Accent
-        pcall(function() Accent:SetBrushColor(LC(0.95,0.02,0.04,1.0)) end)
-        centerSlot(Accent, V2(6,54), -DialogW*0.5 + 3, -DialogH*0.5 + 27, 99993)
-    end
-
-    local Title = nil
-    pcall(function() Title = CGame:NewObjectFromPath("/Script/UMG.TextBlock", Parent) end)
-    if Title and slua.isValid(Title) then
-        _L.InputWidgets[#_L.InputWidgets + 1] = Title
-        pcall(function()
-            Title:SetText("ENTER LICENSE OWNER +92 [ 03277846151 ]")
-            local c = LC(1.0,0.15,0.08,1.0)
-            if SC then Title:SetColorAndOpacity(SC(c)) else Title:SetColorAndOpacity(c) end
-            if Title.Font then local f=Title.Font; f.Size=20; Title.Font=f end
-        end)
-        centerSlot(Title, V2(480,40), -DialogW*0.5 + 265, -DialogH*0.5 + 27, 99994)
-    end
-
-    local Close = nil
-    pcall(function() Close = CGame:NewObjectFromPath("/Script/UMG.Button", Parent) end)
-    if Close and slua.isValid(Close) then
-        _L.InputWidgets[#_L.InputWidgets + 1] = Close
-        pcall(function() Close:SetColorAndOpacity(LC(0.85,0.02,0.03,1.0)) end)
-        local xt = nil
-        pcall(function() xt = CGame:NewObjectFromPath("/Script/UMG.TextBlock", Close) end)
-        if xt and slua.isValid(xt) then
-            _L.InputWidgets[#_L.InputWidgets + 1] = xt
-            pcall(function()
-                xt:SetText("X")
-                if xt.Font then local f=xt.Font; f.Size=24; xt.Font=f end
-            end)
-            pcall(function() Close:AddChild(xt) end)
-        end
-        centerSlot(Close, V2(45,54), DialogW*0.5 - 22.5, -DialogH*0.5 + 27, 99995)
-        local cancelHandled = false
-        local function doCancel()
-            if cancelHandled then return end
-            cancelHandled = true
-            -- Permanently stop the duplicate startup timers from reopening
-            -- the dialog after the user explicitly presses X.
-            _G.LicenseSessionCancelled = true
-            _G.LicenseSessionKeyConfirmed = false
-            _G.LicenseValid = false
-            _G.ModsEnabled = false
-            _L.CloseInput()
-            if callback then callback(nil, true) end
-        end
-        _L.AddClick(Close, doCancel)
-        _L.AddPress(Close, doCancel)
-    end
-
-    -- Actual editable text widget.
-    local Box = nil
-    pcall(function() Box = CGame:NewObjectFromPath("/Script/UMG.EditableTextBox", Parent) end)
-    if not Box or not slua.isValid(Box) then
-        _L.CloseInput()
-        _L.ShowPopup("LICENSE ERROR", "This game build does not expose UMG EditableTextBox to Lua.")
-        return
-    end
-    _L.InputWidgets[#_L.InputWidgets + 1] = Box
-    pcall(function()
-        if Box.SetHintText then Box:SetHintText("Tap to type.") end
-        if Box.SetIsReadOnly then Box:SetIsReadOnly(false) end
-        if Box.SetIsPassword then Box:SetIsPassword(false) end
-        if Box.SetText then Box:SetText(_L.CachedKey or "") end
-         if Box.SetBackgroundColor then Box:SetBackgroundColor(LC(0.035,0.035,0.045,0.98)) end
-         if Box.SetForegroundColor then Box:SetForegroundColor(LC(1.0,1.0,1.0,1.0)) end
-    end)
-    centerSlot(Box, V2(380,55), 0, -DialogH*0.5 + 142.5, 99996)
-    _L.InputBox = Box
-
-    -- OK button.
-    local Btn = nil
-    pcall(function() Btn = CGame:NewObjectFromPath("/Script/UMG.Button", Parent) end)
-    if not Btn or not slua.isValid(Btn) then
-        _L.CloseInput()
-        _L.ShowPopup("LICENSE ERROR", "Unable to create OK button.")
-        return
-    end
-    _L.InputWidgets[#_L.InputWidgets + 1] = Btn
-    pcall(function()
-        if Btn.SetColorAndOpacity then Btn:SetColorAndOpacity(LC(0.90,0.015,0.03,1.0)) end
-    end)
-    local Bt = nil
-    pcall(function() Bt = CGame:NewObjectFromPath("/Script/UMG.TextBlock", Parent) end)
-    if Bt and slua.isValid(Bt) then
-        _L.InputWidgets[#_L.InputWidgets + 1] = Bt
-        pcall(function()
-            Bt:SetText("OK")
-            if Bt.Font then local f=Bt.Font; f.Size=20; Bt.Font=f end
-        end)
-        pcall(function() Btn:AddChild(Bt) end)
-    end
-    centerSlot(Btn, V2(160,58), 0, DialogH*0.5 - 40, 99997)
-    _L.InputButton = Btn
-
-    _L.InputSubmitLocked = false
-    _L.AddClick(Btn, function()
-        if _L.InputSubmitLocked == true or _G.LicenseChecking == true then return end
-        _L.InputSubmitLocked = true
-        _G.LicenseSessionCancelled = false
-        local key = _L.GetText(Box)
-        if key == "" then
-            _L.InputSubmitLocked = false
-            _L.ShowPopup("LICENSE ERROR", "No license key entered")
-            pcall(function() if Box.SetKeyboardFocus then Box:SetKeyboardFocus() end end)
-            return
-        end
-        _L.CachedKey = key
-        _G.__GRW_LICENSE_KEY = key
-        -- IMPORTANT: do not close the input here. Validation happens after
-        -- this callback. The dialog closes only after the server accepts it.
-        _L.InputBusy = false
-        if callback then callback(key, false) end
-    end)
-
-    _L.InputRoot = Panel
-    pcall(function()
-        if Box.SetKeyboardFocus then Box:SetKeyboardFocus() end
-    end)
-    return true
-end
-
-_L.GetHWID = function()
-    local hwid = nil
-    pcall(function()
-        local Kismet = import('/Script/Engine.KismetSystemLibrary')
-        if Kismet and Kismet.GetDeviceId then
-            local v = Kismet.GetDeviceId()
-            if v and tostring(v) ~= "" then hwid = tostring(v) end
-        end
-    end)
-    if not hwid then
-        pcall(function()
-            local SystemLib = import("KismetSystemLibrary")
-            if SystemLib and SystemLib.GetDeviceId then
-                local v = SystemLib.GetDeviceId()
-                if v and tostring(v) ~= "" then hwid = tostring(v) end
-            end
-        end)
-    end
-    return hwid or "UNKNOWN"
-end
-
-_L.UrlEncode = function(value)
-    value = tostring(value or "")
-    value = value:gsub("\n", "\r\n")
-    return value:gsub("([^%w%-%._~])", function(c)
-        return string.format("%%%02X", string.byte(c))
-    end)
-end
-
-_L.JsonString = function(resp, field)
-    return string.match(resp, '"' .. field .. '"%s*:%s*"([^"]*)"')
-end
-
-_L.JsonNumber = function(resp, field)
-    local value = string.match(resp, '"' .. field .. '"%s*:%s*(-?%d+%.?%d*)')
-    return value and tonumber(value) or nil
-end
-
-_L.GetReason = function(resp)
-    return _L.JsonString(resp, "reason")
-        or _L.JsonString(resp, "message")
-        or _L.JsonString(resp, "msg")
-        or "Validation Failed"
-end
-
-_G.IsLicenseOK = function()
-    return _G.LicenseValid == true and _G.ModsEnabled == true
-end
-
-_G.License_Validate = function(callback)
-    if _G.LicenseSessionCancelled == true then
-        _G.LicenseValid = false
-        _G.ModsEnabled = false
-        if callback then callback(false) end
-        return
-    end
-
-    if _G.LicenseSessionKeyConfirmed ~= true then
-        if _G.LicenseChecking == true or _L.InputBusy == true then return end
-        _L.ShowKeyInput(function(key, cancelled)
-            if cancelled or not key or tostring(key) == "" then
-                _G.LicenseSessionKeyConfirmed = false
-                if callback then callback(false) end
-                return
-            end
-            _L.CachedKey = tostring(key)
-            _G.__GRW_LICENSE_KEY = _L.CachedKey
-            _G.LicenseSessionKeyConfirmed = true
-            _G.License_Validate(callback)
-        end)
-        return
-    end
-
-    if _G.LicenseValid == true then
-        if callback then callback(true) end
-        return
-    end
-    if _G.LicenseChecking == true or _L.InputBusy == true then return end
-
-    local userKey = _L.CachedKey or _G.__GRW_LICENSE_KEY or ""
-    userKey = tostring(userKey):gsub("^%s+", ""):gsub("%s+$", "")
-    userKey = userKey:gsub("[%r%n%s]+", "")
-
-    if userKey == "" then
-        _G.LicenseSessionKeyConfirmed = false
-        _L.ShowKeyInput(function(key, cancelled)
-            if cancelled or not key then
-                if callback then callback(false) end
-                return
-            end
-            _L.CachedKey = key
-            _G.__GRW_LICENSE_KEY = key
-            _G.LicenseSessionKeyConfirmed = true
-            _G.License_Validate(callback)
-        end)
-        return
-    end
-
-    local userHWID = _L.GetHWID()
-    if not userHWID or userHWID == "" then userHWID = "UNKNOWN" end
-
-    local ok, http = pcall(function()
-        return ModuleManager.GetModule(ModuleManager.CommonModuleConfig.http_manager)
-    end)
-    if not ok or not http or not http.Post then
-        _L.ShowPopup("LICENSE ERROR", "HTTP manager not available")
-        if callback then callback(false) end
-        return
-    end
-
-    local c_rng = tostring(GetSafeTime())
-    local postData = "game=" .. _L.UrlEncode(_L.LICENSE_GAMES)
-        .. "&user_key=" .. _L.UrlEncode(userKey)
-        .. "&serial=" .. _L.UrlEncode(userHWID)
-        .. "&verrr=" .. _L.UrlEncode(_L.APP_VERSION)
-        .. "&c_rng=" .. _L.UrlEncode(c_rng)
-
-    local headers = {
-        ["Content-Type"] = "application/x-www-form-urlencoded",
-        ["Accept"] = "application/json",
-        ContentType = "application/x-www-form-urlencoded",
-        contentType = "application/x-www-form-urlencoded"
-    }
-
-    _G.LicenseChecking = true
-
-    local function extractStr(x)
-        if x == nil then return nil end
-        if type(x) == "string" and #x > 2 then return x end
-        if type(x) == "number" then return nil end
-        if type(x) == "table" then
-            if type(x.body) == "string" and #x.body > 2 then return x.body end
-            if type(x.Body) == "string" and #x.Body > 2 then return x.Body end
-            if type(x.Content) == "string" and #x.Content > 2 then return x.Content end
-            if type(x.content) == "string" and #x.content > 2 then return x.content end
-            if type(x.data) == "string" and #x.data > 2 then return x.data end
-            local okEnc, j = pcall(function()
-                local cjson = require("cjson")
-                return cjson.encode(x)
-            end)
-            if okEnc and j and #j > 2 then return j end
-        end
-        return nil
-    end
-
-    local function getResponse(a, b)
-        local sa = extractStr(a)
-        local sb = extractStr(b)
-        local function looksJson(s)
-            if not s then return false end
-            if string.find(s, "{", 1, true) then return true end
-            return false
-        end
-        if looksJson(sa) then return sa end
-        if looksJson(sb) then return sb end
-        return sa or sb or ""
-    end
-
-    local postOk, postErr = pcall(function()
-        http:Post(_L.API_URL, headers, postData, nil, function(a, b)
-            _G.LicenseChecking = false
-
-            local response = getResponse(a, b)
-            response = tostring(response or "")
-            response = response:gsub("^%s+", ""):gsub("%s+$", "")
-
-            print("[LICENSE DEBUG] Response length: " .. tostring(#response))
-            if #response > 0 and #response < 600 then
-                print("[LICENSE DEBUG] Response: " .. response)
-            end
-
-            local validated = false
-            local errorMessage = "Bad Server Response"
-
-            if response ~= "" and string.find(response, "{", 1, true) then
-                local parsed = nil
-                pcall(function()
-                    local cjson = require("cjson")
-                    parsed = cjson.decode(response)
-                end)
-
-                local status_val = nil
-                local data_obj = nil
-
-                if parsed then
-                    status_val = parsed.status
-                    if status_val == nil then status_val = parsed.success end
-                    data_obj = parsed.data or parsed
-                end
-
-                if status_val == nil then
-                    if string.find(response, '"status"%s*:%s*true') then
-                        status_val = true
-                    elseif string.find(response, '"success"%s*:%s*true') then
-                        status_val = true
-                    else
-                        status_val = false
-                    end
-                end
-
-                if status_val == true then
-                    local token, exp, rng, modname, modStatus, credit, expiredDate, enc
-                    if data_obj and type(data_obj) == "table" then
-                        token       = data_obj.token
-                        exp         = data_obj.EXP or data_obj.exp or data_obj.expiry
-                        rng         = data_obj.rng
-                        modname     = data_obj.modname or data_obj.mod_name
-                        modStatus   = data_obj.mod_status or data_obj.status_text
-                        credit      = data_obj.credit
-                        expiredDate = data_obj.expired_date or data_obj.expiry_date
-                        enc         = data_obj.Enc or data_obj.enc
-                    end
-                    if not token then token = _L.JsonString(response, "token") end
-                    if not exp then exp = _L.JsonString(response, "EXP") end
-                    if not rng then rng = _L.JsonNumber(response, "rng") end
-                    if not modname then modname = _L.JsonString(response, "modname") end
-                    if not modStatus then modStatus = _L.JsonString(response, "mod_status") end
-                    if not credit then credit = _L.JsonString(response, "credit") end
-                    if not expiredDate then expiredDate = _L.JsonString(response, "expired_date") end
-                    if not enc then enc = _L.JsonString(response, "Enc") end
-
-                    if exp then _G.LicenseEXP = exp end
-                    if rng then _G.LicenseRng = rng end
-                    if token then _G.LicenseToken = token end
-                    if modname then _G.LicenseModName = modname end
-                    if modStatus then _G.LicenseModStatus = modStatus end
-                    if credit then _G.LicenseCredit = credit end
-                    if expiredDate then _G.LicenseExpiredDate = expiredDate end
-                    if enc then _G.LicenseEnc = enc end
-                    validated = true
-                else
-                    if parsed and type(parsed) == "table" then
-                        errorMessage = parsed.reason or parsed.message or parsed.msg
-                            or _L.GetReason(response)
-                    else
-                        errorMessage = _L.GetReason(response)
-                    end
-                end
-            elseif response == "" then
-                errorMessage = "Empty Server Response - Check internet"
-            else
-                errorMessage = "Server Error: " .. tostring(response):sub(1, 80)
-            end
-
-            if validated then
-                _G.LicenseValid = true
-                _G.ModsEnabled = true
-                _G.LicenseSessionKeyConfirmed = true
-                _L.CloseInput()
-                _L.SaveKey(userKey)
-                print("[LICENSE] VALID - Mods enabled")
-                if callback then callback(true) end
-            else
-                _G.LicenseValid = false
-                _G.ModsEnabled = false
-                _G.LicenseSessionKeyConfirmed = false
-                _L.InputBusy = false
-                _L.InputSubmitLocked = false
-                _L.ShowPopup("LICENSE ERROR", tostring(errorMessage))
-                pcall(function()
-                    if _L.InputBox and _L.InputBox.SetKeyboardFocus then
-                        _L.InputBox:SetKeyboardFocus()
-                    end
-                end)
-                print("[LICENSE] INVALID - " .. tostring(errorMessage))
-                if callback then callback(false) end
-            end
-        end, 30)
-    end)
-
-    if not postOk then
-        _G.LicenseChecking = false
-        _L.InputBusy = false
-        _L.InputSubmitLocked = false
-        _L.ShowPopup("LICENSE ERROR", "Network exception - check internet")
-        print("[LICENSE] Exception: " .. tostring(postErr))
-        if callback then callback(false) end
-    end
-end
-
-_G.License_ReadKey = function() return _L.CachedKey or "" end
-_G.License_GetHWID = _L.GetHWID
-_G.License_API_URL = _L.API_URL
-_G.Aegis = _G.Aegis or {}
-_G.Aegis.Up = _G.Aegis.Up or {}
-local A = _G.Aegis
-
-A.Config = A.Config or {
-  Chams = false,
-  WallVehicle = false,
-  Antenna = false,
-  MeterMarks = false,
-  Ipad = false,
-  IpadFov = 120,
-  HighFps = false,
-  Weapons = false
-}
 
 local tick = nil
 pcall(function() tick = require("common.time_ticker") end)
@@ -1473,7 +576,9 @@ local function Later(seconds, fn, allowSync)
   end
 end
 
-local Shield = {}
+_G.Aegis = _G.Aegis or {}
+_G.Aegis.Up = _G.Aegis.Up or {}
+local A = _G.Aegis
 
 local function NoOp() return true end
 local function NoFalse() return false end
@@ -1495,6 +600,9 @@ local function MuteObject(obj)
   end
 end
 
+-- ============================================================================
+-- BAN BYPASS — COMPLETE
+-- ============================================================================
 local BanShield = {}
 
 function BanShield.KillBanFunctions()
@@ -1692,6 +800,11 @@ function BanShield.Install()
   print("[BAN BYPASS 4.6] All ban systems neutralized")
 end
 
+-- ============================================================================
+-- SHIELD — anti-detection
+-- ============================================================================
+local Shield = {}
+
 function Shield.NeutralizeLoaders()
   pcall(function()
     if slua and slua.getSignature then slua.getSignature = NoZero end
@@ -1817,68 +930,28 @@ function Shield.NeutralizeSkins()
   end)
 end
 
-local ReportFlowNames = {
-  "ReportAimFlow", "ReportHitFlow", "ReportAttackFlow", "ReportSecAttackFlow",
-  "ReportFireArms", "ReportVerifyInfoFlow", "ReportMrpcsFlow", "ReportPlayerBehavior",
-  "ReportTeammatHurt", "ReportMisKillByTeammate", "ReportForbitPick",
-  "ReportPlayerMoveRoute", "ReportPlayerPosition", "ReportVehicleMoveFlow",
-  "ReportSecTgameMovingFlow", "ReportParachuteData", "ReportEquipmentFlow",
-  "ReportPlayersPing", "ReportPlayerIP", "ReportPlayerFramePingRecord",
-  "ReportDSNetSaturation", "ReportNetContinuousSaturate", "ReportDSNetRate",
-  "ReportCircleFlow", "ReportSecMrpcsFlow", "SendTssSdkAntiDataToLobby",
-  "SendClientStats", "SendServerAvgTickDelta", "SwiftHawk", "ClientSwiftHawk",
-  "ClientSwiftHawkWithParams", "ClientSecMrpcsFlow", "MrpcsData"
-}
-local BlockPacketNames = {
-  ["ReportAttackFlow"]=1, ["ReportSecAttackFlow"]=1, ["ReportFireArms"]=1,
-  ["ReportVerifyInfoFlow"]=1, ["ReportMrpcsFlow"]=1, ["ReportPlayerBehavior"]=1,
-  ["ReportTeammatHurt"]=1, ["ReportPlayerMoveRoute"]=1, ["ReportPlayerPosition"]=1,
-  ["report_parachute_data"]=1, ["on_tss_sdk_anti_data"]=1, ["ReportAimFlow"]=1,
-  ["ReportHitFlow"]=1, ["ReportCircleFlow"]=1, ["report_players_ping"]=1,
-  ["report_player_ip"]=1, ["report_net_saturate"]=1, ["report_speed_hack"]=1,
-  ["report_wall_hack"]=1, ["report_aim_bot"]=1, ["report_esp_usage"]=1,
-  ["report_modded_files"]=1, ["detect_cheat"]=1, ["ban_player"]=1,
-  ["client_anti_cheat_report"]=1, ["ClientSecMrpcsFlow"]=1, ["MrpcsData"]=1,
-  ["CheckReportSecAttackFlow"]=1, ["CheckReportSecAttackFlowWithAttackFlow"]=1,
-  ["RPC_ClientCoronaLab"]=1, ["CoronaLabReport"]=1, ["CoronaLabData"]=1,
-  ["PlayerSecurityInfo"]=1, ["ReportSecurityInfo"]=1, ["SendSecurityData"]=1,
-  ["ClientCircleFlow"]=1, ["bReportedModifierException"]=1, ["ReportModifierException"]=1,
-  ["RPC_Server_ReportSimulateCharacterLocation"]=1, ["ReportSimulateCharacterLocation"]=1,
-  ["RPC_Client_ShootVertifyRes"]=1, ["BulletHitInfoUploadData"]=1, ["ShootVerifyFailed"]=1,
-  ["report_unrealnet_exception"]=1, ["tss_sdk_report"]=1, ["SwiftHawk"]=1,
-  ["ClientSwiftHawk"]=1, ["ClientSwiftHawkWithParams"]=1, ["SwiftHawkReport"]=1,
-  ["SwiftHawkData"]=1, ["AntiCheatReport"]=1, ["CheatDetection"]=1, ["ViolationReport"]=1,
-  ["SecurityViolation"]=1, ["IntegrityCheck"]=1, ["SignatureVerify"]=1,
-  ["OperationalStats"]=1, ["ReportOperationalStats"]=1, ["OperationalStatsReport"]=1
-}
-local BlockRpcNames = {
-  "RPC_Server_ClientSecMrpcsFlow", "RPC_Server_SwiftHawk",
-  "RPC_Server_ClientSwiftHawkWithParams", "RPC_Server_ReportSimulateCharacterLocation",
-  "RPC_Client_ShootVertifyRes", "RPC_ClientCoronaLab", "RPC_OperationalStats"
-}
-local KillSubSystems = {
-  "AFKReportorSubsystem", "ClientDataStatistcsSubsystem", "AvatarExceptionSubsystem",
-  "ShootVerifySubSystemClient", "MemoryCheckSubsystem", "SpeedCheckSubsystem",
-  "WallCheckSubsystem", "FileCheckSubsystem", "BehaviorScoreSubsystem",
-  "CoronaLabSubsystem", "PlayerSecurityInfoSubsystem", "ClientCircleFlowSubsystem",
-  "ModifierExceptionSubsystem", "SimulateCharacterSubsystem",
-  "ClientReportPlayerSubsystem", "DSReportPlayerSubsystem",
-  "ClientHawkEyePatrolSubsystem", "DSHawkEyePatrolSubsystem",
-  "GameReportSubsystem", "ReplaySubsystem", "SwiftHawkSubsystem",
-  "AntiCheatSubsystem", "IntegrityCheckSubsystem", "SignatureVerifySubsystem",
-  "MD5CheckSubsystem", "PakVerifySubsystem", "OperationalStatsSubsystem",
-  "MrpcsFlowSubsystem", "CircleFlowSubsystem",
-  "ClientESPDetectionSubsystem", "ClientAimTrackingSubsystem",
-  "ClientRenderCheckSubsystem", "ClientMemoryGuardSubsystem",
-  "ClientKernelCheckSubsystem", "ClientWallhackDetectionSubsystem",
-  "ClientAntiCheatSubsystem", "ClientSecMrpcsFlowSubsystem",
-  "ShootVerifySubSystemClient"
-}
-
 function Shield.NeutralizeSubSystems()
   pcall(function()
     local mgr = require("GameLua.GameCore.Module.Subsystem.SubsystemMgr")
     if mgr then
+      local KillSubSystems = {
+        "AFKReportorSubsystem", "ClientDataStatistcsSubsystem", "AvatarExceptionSubsystem",
+        "ShootVerifySubSystemClient", "MemoryCheckSubsystem", "SpeedCheckSubsystem",
+        "WallCheckSubsystem", "FileCheckSubsystem", "BehaviorScoreSubsystem",
+        "CoronaLabSubsystem", "PlayerSecurityInfoSubsystem", "ClientCircleFlowSubsystem",
+        "ModifierExceptionSubsystem", "SimulateCharacterSubsystem",
+        "ClientReportPlayerSubsystem", "DSReportPlayerSubsystem",
+        "ClientHawkEyePatrolSubsystem", "DSHawkEyePatrolSubsystem",
+        "GameReportSubsystem", "ReplaySubsystem", "SwiftHawkSubsystem",
+        "AntiCheatSubsystem", "IntegrityCheckSubsystem", "SignatureVerifySubsystem",
+        "MD5CheckSubsystem", "PakVerifySubsystem", "OperationalStatsSubsystem",
+        "MrpcsFlowSubsystem", "CircleFlowSubsystem",
+        "ClientESPDetectionSubsystem", "ClientAimTrackingSubsystem",
+        "ClientRenderCheckSubsystem", "ClientMemoryGuardSubsystem",
+        "ClientKernelCheckSubsystem", "ClientWallhackDetectionSubsystem",
+        "ClientAntiCheatSubsystem", "ClientSecMrpcsFlowSubsystem",
+        "ShootVerifySubSystemClient"
+      }
       for _, name in ipairs(KillSubSystems) do
         local sub = mgr:Get(name)
         if sub then
@@ -1900,6 +973,19 @@ function Shield.NeutralizeSubSystems()
     if rep then rep.ReportReplay, rep.SendReportReq, rep.UploadReplay = NoOp, NoOp, NoOp end
   end)
 end
+
+local ReportFlowNames = {
+  "ReportAimFlow", "ReportHitFlow", "ReportAttackFlow", "ReportSecAttackFlow",
+  "ReportFireArms", "ReportVerifyInfoFlow", "ReportMrpcsFlow", "ReportPlayerBehavior",
+  "ReportTeammatHurt", "ReportMisKillByTeammate", "ReportForbitPick",
+  "ReportPlayerMoveRoute", "ReportPlayerPosition", "ReportVehicleMoveFlow",
+  "ReportSecTgameMovingFlow", "ReportParachuteData", "ReportEquipmentFlow",
+  "ReportPlayersPing", "ReportPlayerIP", "ReportPlayerFramePingRecord",
+  "ReportDSNetSaturation", "ReportNetContinuousSaturate", "ReportDSNetRate",
+  "ReportCircleFlow", "ReportSecMrpcsFlow", "SendTssSdkAntiDataToLobby",
+  "SendClientStats", "SendServerAvgTickDelta", "SwiftHawk", "ClientSwiftHawk",
+  "ClientSwiftHawkWithParams", "ClientSecMrpcsFlow", "MrpcsData"
+}
 
 function Shield.NeutralizeGlobalFlows()
   pcall(function()
@@ -1939,6 +1025,13 @@ local _NetShielded = false
 function Shield.NeutralizeNet()
   if _NetShielded then return end
   pcall(function()
+    local BlockPacketNames = {
+      ["ReportAttackFlow"]=1, ["ReportSecAttackFlow"]=1, ["ReportFireArms"]=1,
+      ["ReportVerifyInfoFlow"]=1, ["ReportMrpcsFlow"]=1, ["ReportPlayerBehavior"]=1,
+      ["ReportAimFlow"]=1, ["ReportHitFlow"]=1, ["ReportCircleFlow"]=1,
+      ["report_parachute_data"]=1, ["on_tss_sdk_anti_data"]=1,
+      ["SwiftHawk"]=1, ["ClientSwiftHawk"]=1, ["ClientSwiftHawkWithParams"]=1
+    }
     if NetUtil and NetUtil.SendPacket then
       local original = NetUtil.SendPacket
       NetUtil.SendPacket = function(packetName, ...)
@@ -1949,6 +1042,11 @@ function Shield.NeutralizeNet()
     if _G.SendRPC then
       local originalRpc = _G.SendRPC
       _G.SendRPC = function(rpcName, ...)
+        local BlockRpcNames = {
+          "RPC_Server_ClientSecMrpcsFlow", "RPC_Server_SwiftHawk",
+          "RPC_Server_ClientSwiftHawkWithParams", "RPC_Server_ReportSimulateCharacterLocation",
+          "RPC_Client_ShootVertifyRes", "RPC_ClientCoronaLab", "RPC_OperationalStats"
+        }
         for _, b in ipairs(BlockRpcNames) do
           if rpcName == b then return nil end
         end
@@ -2124,9 +1222,237 @@ function Shield.Hum()
     end
   end)
 end
+-- ============================================================================
+-- BAN SHIELD UPGRADE — UI-layer ban popup suppression
+-- ============================================================================
+local BanShieldUpgrade = {}
+local _Hooked_UI, _Hooked_Msg, _Hooked_Login = false, false, false
+local _BanPopupBlocked = 0
+
+local BanKeyPatterns = {
+  "ban", "notice", "kick", "cheat", "violation", "suspicious",
+  "punish", "restrict", "forbid", "antiaddict", "anticheat",
+  "security", "integrity", "blockade", "seal", "freeze",
+  "warning", "warningtips", "strongtips", "credit", "creditnotice"
+}
+local BanTextPatterns = {
+  "banned", "ban for", "cheating", "unauthorized", "unusual",
+  "violation", "account has been", "end time", "appeal",
+  "anti-addiction", "restricted", "suspended", "kick",
+  "封号", "违规", "作弊", "限制", "禁止"
+}
+
+local function IsBanKey(name)
+  if type(name) ~= "string" then return false end
+  local low = name:lower()
+  for _, p in ipairs(BanKeyPatterns) do
+    if low:find(p, 1, true) then return true end
+  end
+  return false
+end
+local function ContainsBanText(text)
+  if type(text) ~= "string" then return false end
+  local low = text:lower()
+  for _, p in ipairs(BanTextPatterns) do
+    if low:find(p, 1, true) then return true end
+  end
+  return false
+end
+local function ReadWidgetText(widget)
+  if widget == nil then return nil end
+  local ok, txt = pcall(function()
+    if type(widget.GetText) == "function" then return widget:GetText() end
+  end)
+  if ok and type(txt) == "string" then return txt end
+  ok, txt = pcall(function() return widget.Text end)
+  if ok and type(txt) == "string" then return txt end
+  ok, txt = pcall(function() return widget.Content end)
+  if ok and type(txt) == "string" then return txt end
+  return nil
+end
+local function WidgetTreeHasBanText(widget, depth)
+  depth = depth or 0
+  if depth > 8 or widget == nil then return false end
+  local txt = ReadWidgetText(widget)
+  if txt and ContainsBanText(txt) then return true end
+  local ok, children = pcall(function()
+    if type(widget.GetAllChildren) == "function" then
+      local arr = widget:GetAllChildren()
+      if arr then
+        local out = {}
+        local n = type(arr.Num) == "function" and arr:Num() or #arr
+        for i = 1, n do
+          local c = type(arr.Get) == "function" and arr:Get(i - 1) or arr[i]
+          if c then out[#out + 1] = c end
+        end
+        return out
+      end
+    end
+    if type(widget.GetChildren) == "function" then
+      local arr = widget:GetChildren()
+      if arr then
+        local out = {}
+        local n = type(arr.Num) == "function" and arr:Num() or #arr
+        for i = 1, n do
+          local c = type(arr.Get) == "function" and arr:Get(i - 1) or arr[i]
+          if c then out[#out + 1] = c end
+        end
+        return out
+      end
+    end
+  end)
+  if ok and type(children) == "table" then
+    for _, c in ipairs(children) do
+      if WidgetTreeHasBanText(c, depth + 1) then return true end
+    end
+  end
+  return false
+end
+local function _BLog(msg)
+  pcall(print, "[BAN-SHIELD-UP] " .. tostring(msg))
+end
+
+local function HookUIManager()
+  if _Hooked_UI then return true end
+  local UM = _G.UIManager
+  if not UM or type(UM.ShowUI) ~= "function" then return false end
+  local origShow = UM.ShowUI
+  UM.ShowUI = function(self, config, params, ...)
+    local keyName
+    pcall(function()
+      if type(config) == "table" then
+        keyName = config.keyName or config.Key or config.Name or config.UIPathName
+      elseif type(config) == "string" then
+        keyName = config
+      end
+    end)
+    if IsBanKey(keyName) then
+      _BanPopupBlocked = _BanPopupBlocked + 1
+      _BLog("Blocked UI: " .. tostring(keyName))
+      return { Close = function() end, SetVisibility = function() end, UIRoot = nil }
+    end
+    local args = {...}
+    local n = select("#", ...)
+    local ok, result = pcall(function()
+      local unpack = table.unpack or unpack
+      return origShow(self, config, params, unpack(args, 1, n))
+    end)
+    if not ok then return nil end
+    pcall(function()
+      local view = result
+      local root = view and view.UIRoot or view
+      if root and WidgetTreeHasBanText(root, 0) then
+        _BanPopupBlocked = _BanPopupBlocked + 1
+        _BLog("Post-show ban text detected: " .. tostring(keyName) .. " -> closing")
+        pcall(function() if type(view.Close) == "function" then view:Close() end end)
+        pcall(function() if type(view.SetVisibility) == "function" then view:SetVisibility(2) end end)
+        pcall(function() if type(UM.CloseUI) == "function" and config then UM.CloseUI(config) end end)
+      end
+    end)
+    return result
+  end
+  _Hooked_UI = true
+  _BLog("UIManager.ShowUI hooked")
+  return true
+end
+
+local function HookMsgBox()
+  if _Hooked_Msg then return true end
+  local paths = {
+    "client.slua.logic.common.logic_common_msg_box",
+    "client.logic.common.logic_common_msg_box",
+  }
+  local hooked = false
+  for _, path in ipairs(paths) do
+    local mod = package.loaded[path]
+    if not mod then
+      local ok, m = pcall(require, path)
+      if ok and m then mod = m end
+    end
+    if mod and type(mod.Show) == "function" and not mod.__BanShieldPatched then
+      local origShow = mod.Show
+      mod.Show = function(mode, title, body, onYes, onNo, yesText, noText, ...)
+        local full = tostring(title or "") .. " " .. tostring(body or "")
+        if ContainsBanText(full) then
+          _BanPopupBlocked = _BanPopupBlocked + 1
+          _BLog("Blocked msg_box: " .. full:sub(1, 60))
+          if type(onNo) == "function" then pcall(onNo) end
+          if type(onYes) == "function" then pcall(onYes) end
+          return
+        end
+        return origShow(mode, title, body, onYes, onNo, yesText, noText, ...)
+      end
+      mod.__BanShieldPatched = true
+      hooked = true
+    end
+  end
+  _Hooked_Msg = hooked
+  if hooked then _BLog("msg_box hooked") end
+  return hooked
+end
+
+local function HookLoginNotices()
+  if _Hooked_Login then return true end
+  local hooked = false
+  local targets = {
+    "client.logic.login.logic_login_notice",
+    "client.slua.logic.login.logic_login_notice",
+    "client.logic.login.logic_ban_notice",
+    "client.logic.lobby.logic_lobby_notice",
+    "client.network.Protocol.AccessRestrictionHandler",
+  }
+  for _, path in ipairs(targets) do
+    local mod = package.loaded[path]
+    if not mod then
+      local ok, m = pcall(require, path)
+      if ok and m then mod = m end
+    end
+    if mod and type(mod) == "table" then
+      for k, v in pairs(mod) do
+        if type(v) == "function" and type(k) == "string" then
+          local low = k:lower()
+          if low:find("ban") or low:find("notice") or low:find("restrict")
+             or low:find("kick") or low:find("cheat") or low:find("violation") then
+            pcall(function() mod[k] = function() return true end end)
+            hooked = true
+          end
+        end
+      end
+    end
+  end
+  _Hooked_Login = hooked
+  if hooked then _BLog("login notice handlers muted") end
+  return hooked
+end
+
+local function _BanTick()
+  pcall(HookUIManager)
+  pcall(HookMsgBox)
+  pcall(HookLoginNotices)
+  pcall(function()
+    local ticker = require("common.time_ticker")
+    if ticker and ticker.AddTimerOnce then
+      ticker.AddTimerOnce(0.5, _BanTick)
+    end
+  end)
+end
+
+function BanShieldUpgrade.Install()
+  HookUIManager()
+  HookMsgBox()
+  HookLoginNotices()
+  pcall(function()
+    local ticker = require("common.time_ticker")
+    if ticker and ticker.AddTimerOnce then
+      ticker.AddTimerOnce(0.5, _BanTick)
+    end
+  end)
+  _BLog("Installed. Blocked so far: " .. tostring(_BanPopupBlocked))
+end
+
+_G.BanShieldUpgrade = BanShieldUpgrade
 
 function Shield.InstallAll()
-  if not (_G.IsLicenseOK and _G.IsLicenseOK()) then return end
   if A.Up.Shielded then return end
   A.Up.Shielded = true
   BanShield.Install()
@@ -2144,19 +1470,20 @@ function Shield.InstallAll()
   Shield.NeutralizeLoading()
   Shield.Hum()
   pcall(function() import("KismetSystemLibrary").ExecuteConsoleCommand(nil, "r.ShaderPipelineCache 0") end)
-  print("[SAMEER] ALL PROTECTION + BAN BYPASS 4.6 ACTIVE")
+  print("[SAMEER VIP] ALL PROTECTION + BAN BYPASS 4.6 ACTIVE")
 end
 
-
-local Esp = {}
-
+-- ============================================================================
+-- ONLY MARKS — name mark only
+-- ============================================================================
+local Marks = {}
 local _MarkRetryCount = 0
 local _MarkRetryDelay = 0.5
 
-function Esp.PrimeNativeMarks()
-  if A.Up.NativeReady then 
+function Marks.PrimeConfig()
+  if A.Up.NativeReady then
     A.Up.NativePriming = false
-    return 
+    return
   end
   if _MarkRetryCount > 20 then
     A.Up.NativePriming = false
@@ -2165,27 +1492,17 @@ function Esp.PrimeNativeMarks()
   local ok, result = pcall(function()
     local tools = require("GameLua.Mod.BaseMod.Common.GamePlayTools")
     local cfg = tools.GetCurrentConfig("ScreenMarkConfig")
-    if not cfg then 
+    if not cfg then
       _MarkRetryCount = _MarkRetryCount + 1
       _MarkRetryDelay = math.min(_MarkRetryDelay * 1.5, 5.0)
       Later(_MarkRetryDelay, function()
         A.Up.NativePriming = false
-        Esp.PrimeNativeMarks()
+        Marks.PrimeConfig()
       end, true)
-      return false 
+      return false
     end
     local function Blend(t)
       if not t then return end
-      if t[1006] then
-        t[1006].bBindBlocked = true
-        t[1006].bBindOutScreen = true
-        t[1006].MaxWidgetNum = 99
-        t[1006].MaxShowDistance = 6000000
-        t[1006].bScaleByDistance = false
-        t[1006].BindSocketName = "root"
-        t[1006].bUseLuaWorldSocketName = true
-        t[1006].WorldPositionOffset = {X=0, Y=0, Z=-30}
-      end
       t[9999] = {
         UIPathName = "/Game/Mod/EvoBase/BluePrints/UIBP/QuickSign/QuickSign_TipHitEnemy_UIBP_New.QuickSign_TipHitEnemy_UIBP_New_C",
         MaxWidgetNum = 99, MaxShowDistance = 6000000, bBindOutScreen = true,
@@ -2204,8 +1521,8 @@ function Esp.PrimeNativeMarks()
     _MarkRetryDelay = 0.5
     return true
   end)
-  if ok and result then 
-    A.Up.NativeReady = true 
+  if ok and result then
+    A.Up.NativeReady = true
     A.Up.NativePriming = false
   end
 end
@@ -2242,729 +1559,43 @@ local function EnemyId(enemy)
   return tostring(enemy)
 end
 
-local function MeshBag(enemy, stamp)
-  local now = os.clock()
-  if stamp.CachedMesh and stamp.CachedMeshAt and (now - stamp.CachedMeshAt < 3.0) then
-    local keep = {}
-    for _, m in ipairs(stamp.CachedMesh) do
-      if Around(m) then table.insert(keep, m) end
-    end
-    stamp.CachedMesh = keep
-    return keep
-  end
-  local meshes = {}
-  if Around(enemy.Mesh) then table.insert(meshes, enemy.Mesh) end
-  pcall(function()
-    local skel = import("SkeletalMeshComponent")
-    if skel and type(enemy.GetComponentsByClass) == "function" then
-      local list = enemy:GetComponentsByClass(skel)
-      if list then
-        local n = type(list.Num) == "function" and list:Num() or #list
-        for i = 1, n do
-          local comp = type(list.Get) == "function" and list:Get(i - 1) or list[i]
-          if Around(comp) and comp ~= enemy.Mesh then table.insert(meshes, comp) end
-        end
-      end
-    end
-  end)
-  stamp.CachedMesh = meshes
-  stamp.CachedMeshAt = now
-  return meshes
-end
-
-local function ArmMeshes(enemy, stamp)
-  pcall(function()
-    if not A.Up.DyeingArmed then
-      local lib = import("KismetSystemLibrary")
-      local world = nil
-      pcall(function()
-        local GD = require("GameLua.GameCore.Data.GameplayData")
-        local pc = GD.GetPlayerController()
-        if slua.isValid(pc) then world = pc:GetWorld() end
-      end)
-      if not world then world = slua.getWorld() end
-      if lib and world then
-        lib.ExecuteConsoleCommand(world, "r.EnableDrawDyeingColor 1")
-        lib.ExecuteConsoleCommand(world, "r.CustomDepth 3")
-        lib.ExecuteConsoleCommand(world, "r.IdeaOutline.Enable 1")
-        lib.ExecuteConsoleCommand(world, "r.Highlight.Enable 1")
-        A.Up.DyeingArmed = true
-      end
-    end
-    local meshes = MeshBag(enemy, stamp)
-    pcall(function()
-      local weapon = enemy:GetCurrentWeapon()
-      if Around(weapon) and Around(weapon.Mesh) then table.insert(meshes, weapon.Mesh) end
-    end)
-    local bot = stamp.IsBot or false
-    local sig = (bot and "B" or "P") .. ":" .. tostring(#meshes)
-    if stamp.Sig == sig and stamp.Dyed then return end
-    stamp.Sig = sig
-    stamp.Dyed = true
-    local L = import("LinearColor") or _G.FLinearColor
-    local vis = L and L(0, 1, 0, 1) or {R=0, G=255, B=0, A=1}
-    local occ = L and L(1, 0, 0, 1) or {R=255, G=0, B=0, A=1}
-    for _, m in ipairs(meshes) do
-      if Around(m) then
-        pcall(function()
-          if type(m.SetDrawDyeing) == "function" then
-            m:SetDrawDyeing(true)
-            m:SetDrawDyeingMode(1)
-            m:SetVisibleDyeingColor(vis)
-            m:SetOccludedDyeingColor(occ)
-            m:SetDyeingColorFadeDistance(99999.0)
-            m:SetDyeingColorMinMaxDistance(0.0, 99999.0)
-            m:SetDrawHighlight(true)
-            m:OverrideHighlightColor(vis)
-            m:SetHighlightCanBeOccluded(false)
-            m:SetDrawIdeaOutline(true)
-            m:SetIdeaOutlineNew(true)
-            m:SetIdeaOutlineOcclusionHighlight(true)
-            m:OverrideIdeaOutlineColor(vis)
-            m:SetIdeaOutlineOcclusionColor(occ)
-            m:OverrideIdeaOutlineThickness(20.0)
-            m:SetIdeaOverrideOutlineAndOcclusion(true)
-            m:SetRenderCustomDepth(true)
-            m:SetCustomDepthStencilValue(255)
-          end
-        end)
-        pcall(function()
-          m.LDMaxDrawDistance = -99999
-          m.MaxDrawDistanceOffset = -99999
-          m.CachedMaxDrawDistance = -99999
-        end)
-      end
-    end
-  end)
-end
-
-local function StripMeshes(enemy, stamp)
-  pcall(function()
-    if not stamp.Dyed then return end
-    for _, m in ipairs(MeshBag(enemy, stamp)) do
-      if Around(m) then
-        pcall(function()
-          if type(m.SetDrawDyeing) == "function" then
-            m:SetDrawDyeing(false)
-            m:SetDrawDyeingMode(0)
-            m:SetDrawHighlight(false)
-            m:SetDrawIdeaOutline(false)
-            m:SetRenderCustomDepth(false)
-          end
-        end)
-      end
-    end
-    stamp.Dyed = false
-    stamp.Sig = ""
-  end)
-end
-
-local function DrawAntenna(me, foe, pc)
-  if not Around(me) or not Around(foe) then return end
-  local hud = nil
-  pcall(function()
-    if Around(pc) then hud = pc.MyHUD end
-  end)
-  if not Around(hud) or type(hud.AddDebugText) ~= "function" then return end
-  local black = { R = 0, G = 0, B = 0, A = 255 }
-  local baseZ = 105
-  local step = 120
-  for i = 1, 20 do
-    local z = baseZ + i * step
-    local at = { X = 0, Y = 0, Z = z }
-    hud:AddDebugText("|", foe, 0.06, at, at, black, true, false, true, nil, 0.4, true)
-  end
-  local tip = { X = 0, Y = 0, Z = baseZ + 20 * step + 60 }
-  hud:AddDebugText("I", foe, 0.06, tip, tip, black, true, false, true, nil, 0.5, true)
-end
-
-local Vhc = {}
-function Vhc.StripAll()
-  pcall(function()
-    if not A.Up.VhcDone then return end
-    for id, mesh in pairs(A.Up.VhcDone) do
-      if Around(mesh) then
-        pcall(function()
-          if type(mesh.SetDrawDyeing) == "function" then
-            mesh:SetDrawDyeing(false)
-            mesh:SetDrawDyeingMode(0)
-            mesh:SetDrawHighlight(false)
-            mesh:SetDrawIdeaOutline(false)
-            mesh:SetRenderCustomDepth(false)
-          end
-        end)
-        pcall(function()
-          if type(mesh.GetMaterial) == "function" then
-            local mat = mesh:GetMaterial(0)
-            if Around(mat) and mat.GetBaseMaterial then
-              local baseMat = mat:GetBaseMaterial()
-              if Around(baseMat) then
-                baseMat.bDisableDepthTest = false
-                baseMat.BlendMode = 0
-              end
-            end
-          end
-        end)
-      end
-    end
-    A.Up.VhcDone = {}
-  end)
-end
-
-function Vhc.WallScan(pc)
-  if not Around(pc) then return end
-  pcall(function()
-    local now = os.clock()
-    if A.Up.VhcScanAt and (now - A.Up.VhcScanAt) < 1.0 then return end
-    A.Up.VhcScanAt = now
-    local player = pc:GetPlayerCharacterSafety()
-    if not Around(player) then return end
-    local base = import("STExtraVehicleBase")
-    if not base then return end
-    local list = nil
-    pcall(function()
-      if Game.GetActorsByClass then
-        list = Game:GetActorsByClass(base)
-      elseif Game.GetAllActorsOfClass then
-        list = Game:GetAllActorsOfClass(base)
-      end
-    end)
-    if not list then return end
-    local n = type(list.Num) == "function" and list:Num() or #list
-    for i = 0, n - 1 do
-      local vehicle = type(list.Get) == "function" and list:Get(i) or list[i]
-      if Around(vehicle) and type(vehicle.GetMesh) == "function" then
-        local id = tostring(vehicle)
-        if A.Up.VhcDone and A.Up.VhcDone[id] then goto continue end
-        local dist = 0
-        pcall(function()
-          if type(player.GetDistanceTo) == "function" then dist = player:GetDistanceTo(vehicle) end
-        end)
-        if dist <= 200000 then
-          local mesh = vehicle:GetMesh()
-          if Around(mesh) and type(mesh.GetMaterial) == "function" then
-            pcall(function()
-              local mat = mesh:GetMaterial(0)
-              if Around(mat) and mat.GetBaseMaterial then
-                local baseMat = mat:GetBaseMaterial()
-                if Around(baseMat) then
-                  baseMat.bDisableDepthTest = true
-                  baseMat.BlendMode = 2
-                end
-              end
-            end)
-            pcall(function()
-              local L = import("LinearColor") or _G.FLinearColor
-              local vis = L and L(1, 1, 0, 1) or {R=255, G=255, B=0, A=1}
-              local occ = L and L(1, 1, 0, 1) or {R=255, G=255, B=0, A=1}
-              if type(mesh.SetDrawDyeing) == "function" then
-                mesh:SetDrawDyeing(true)
-                mesh:SetDrawDyeingMode(1)
-                mesh:SetVisibleDyeingColor(vis)
-                mesh:SetOccludedDyeingColor(occ)
-                mesh:SetDyeingColorFadeDistance(99999.0)
-                mesh:SetDyeingColorMinMaxDistance(0.0, 99999.0)
-                mesh:SetDrawHighlight(true)
-                mesh:OverrideHighlightColor(vis)
-                mesh:SetHighlightCanBeOccluded(false)
-                mesh:OverrideOutlineColor(vis)
-                mesh:OverrideIdeaOutlineColor(vis)
-                mesh:SetDrawIdeaOutline(true)
-                mesh:SetIdeaOutlineNew(true)
-                mesh:OverrideIdeaOutlineThickness(12.0)
-                mesh:SetIdeaOverrideOutlineAndOcclusion(true)
-                mesh:SetRenderCustomDepth(true)
-                mesh:SetCustomDepthStencilValue(255)
-              end
-            end)
-            A.Up.VhcDone = A.Up.VhcDone or {}
-            A.Up.VhcDone[id] = mesh
-            for k, v in pairs(A.Up.VhcDone) do
-              if not Around(v) then A.Up.VhcDone[k] = nil end
-            end
-          end
-        end
-      end
-      ::continue::
-    end
-  end)
-end
-
-local Weapons = {}
-local WpnColors = {
-  AR = {R=255, G=255, B=0, A=255},
-  SMG = {R=0, G=255, B=255, A=255},
-  Sniper = {R=255, G=0, B=0, A=255},
-  Shotgun = {R=0, G=255, B=0, A=255},
-  LMG = {R=255, G=255, B=255, A=255},
-  Pistol = {R=200, G=200, B=200, A=255},
-  Melee = {R=150, G=150, B=150, A=255},
-  Special = {R=255, G=0, B=255, A=255},
-  Scope = {R=0, G=0, B=255, A=255}
-}
-local WpnDb = {
-  [101001] = {"AKM","AR"}, [101002] = {"M16A4","AR"}, [101003] = {"SCAR-L","AR"},
-  [101004] = {"M416","AR"}, [101005] = {"Groza","AR"}, [101006] = {"AUG","AR"},
-  [101007] = {"QBZ","AR"}, [101008] = {"M762","AR"}, [101009] = {"Mk47 Mutant","AR"},
-  [101010] = {"G36C","AR"}, [101011] = {"AC-VAL","AR"}, [101012] = {"Honey Badger","AR"},
-  [101100] = {"FAMAS","AR"}, [101101] = {"ASM Abakan AR","AR"}, [101102] = {"ACE32","AR"},
-  [102001] = {"UZI","SMG"}, [102002] = {"UMP45","SMG"}, [102003] = {"Vector","SMG"},
-  [102004] = {"Thompson SMG","SMG"}, [102005] = {"PP-19 Bizon","SMG"}, [102007] = {"MP5K","SMG"},
-  [102008] = {"JS9","SMG"}, [102105] = {"P90","SMG"},
-  [103001] = {"Kar98K","Sniper"}, [103002] = {"M24","Sniper"}, [103003] = {"AWM","Sniper"},
-  [103004] = {"SKS","Sniper"}, [103005] = {"VSS","Sniper"}, [103006] = {"Mini14","Sniper"},
-  [103007] = {"Mk14","Sniper"}, [103008] = {"Win94","Sniper"}, [103009] = {"SLR","Sniper"},
-  [103010] = {"QBU","Sniper"}, [103011] = {"Mosin Nagant","Sniper"}, [103012] = {"AMR","Sniper"},
-  [103100] = {"Mk12","Sniper"}, [103101] = {"TR-2A Air Gun","Sniper"}, [103102] = {"DSR","Sniper"},
-  [103103] = {"Sniper Rifle","Sniper"}, [103104] = {"Sniper Rifle","Sniper"}, [103105] = {"SR","Sniper"},
-  [104001] = {"S686","Shotgun"}, [104002] = {"S1897","Shotgun"}, [104003] = {"S12K","Shotgun"},
-  [104004] = {"DBS","Shotgun"}, [104100] = {"SPAS-12","Shotgun"}, [104101] = {"M1014","Shotgun"},
-  [104102] = {"NS2000","Shotgun"},
-  [105001] = {"M249","LMG"}, [105002] = {"DP-28","LMG"}, [105003] = {"M134","LMG"},
-  [105010] = {"MG3","LMG"},
-  [106001] = {"P92","Pistol"}, [106002] = {"P1911","Pistol"}, [106003] = {"R1895","Pistol"},
-  [106004] = {"P18C","Pistol"}, [106005] = {"R45","Pistol"}, [106006] = {"Sawed-off","Pistol"},
-  [106008] = {"Skorpion","Pistol"}, [106010] = {"Desert Eagle","Pistol"},
-  [106007] = {"Flare Gun","Pistol"}, [106009] = {"Flare Gun","Pistol"},
-  [107001] = {"Crossbow","Special"}, [107002] = {"RPG-7","Special"}, [107003] = {"Riot Shield","Special"},
-  [108001] = {"Machete","Melee"}, [108002] = {"Crowbar","Melee"}, [108003] = {"Sickle","Melee"},
-  [108004] = {"Pan","Melee"}, [108005] = {"Dagger","Melee"},
-  [203001] = {"Red Dot Sight","Scope"}, [203002] = {"Holographic Sight","Scope"}, [203003] = {"2x Scope","Scope"},
-  [203004] = {"4x Scope","Scope"}, [203005] = {"8x Scope","Scope"}, [203014] = {"3x Scope","Scope"},
-  [203015] = {"6x Scope","Scope"}
-}
-
-function Weapons.Scan(pc)
-  if not Around(pc) then return end
-  pcall(function()
-    local now = os.clock()
-    if A.Up.WpnScanAt and (now - A.Up.WpnScanAt) < 1.0 then return end
-    A.Up.WpnScanAt = now
-    A.Up.NearbyWeapons = {}
-    local player = pc:GetPlayerCharacterSafety()
-    if not Around(player) then return end
-    local cls = import("PickUpWrapperActor") or import("STPickupWrapperActor")
-    if not cls then return end
-    local list = nil
-    pcall(function()
-      if Game.GetActorsByClass then
-        list = Game:GetActorsByClass(cls)
-      elseif Game.GetAllActorsOfClass then
-        list = Game:GetAllActorsOfClass(cls)
-      end
-    end)
-    if not list then return end
-    local n = type(list.Num) == "function" and list:Num() or #list
-    for i = 0, n - 1 do
-      local item = type(list.Get) == "function" and list:Get(i) or list[i]
-      if Around(item) then
-        local dist = 0
-        pcall(function()
-          if type(player.GetDistanceTo) == "function" then dist = player:GetDistanceTo(item) end
-        end)
-        if dist <= 7000 then
-          local itemId = nil
-          pcall(function()
-            if item.DefineID then itemId = item.DefineID.TypeSpecificID or item.DefineID end
-          end)
-          if not itemId and item.DefineId then itemId = item.DefineId end
-          if WpnDb[itemId] then
-            A.Up.NearbyWeapons[#A.Up.NearbyWeapons + 1] = { actor = item, id = itemId }
-          end
-        end
-      end
-    end
-  end)
-end
-
-function Weapons.Draw(pc)
-  if not Around(pc) then return end
-  local hud = nil
-  pcall(function() hud = pc.MyHUD end)
-  if not Around(hud) or type(hud.AddDebugText) ~= "function" then return end
-  local player = pc:GetPlayerCharacterSafety()
-  if not Around(player) or not A.Up.NearbyWeapons then return end
-  for _, entry in ipairs(A.Up.NearbyWeapons) do
-    local item = entry.actor
-    if Around(item) then
-      local info = WpnDb[entry.id]
-      if info then
-        pcall(function()
-          local distM = 0
-          if type(player.GetDistanceTo) == "function" then distM = math.floor(player:GetDistanceTo(item) / 100) end
-          local text = info[1] .. " [" .. tostring(distM) .. "m]"
-          local color = WpnColors[info[2]]
-          hud:AddDebugText(text, item, 0.06, {X=0, Y=0, Z=50}, {X=0, Y=0, Z=50}, color, true, false, true, nil, 0.8, true)
-        end)
-      end
-    end
-  end
-end
-
-local Gfx = {}
-
-function Gfx.PushFps(target)
-  pcall(function()
-    local db = require("client.slua.umg.NewSetting.GraphicsNew.GraphicSettingDB")
-    local inst = db and db.GetGameInstance and db.GetGameInstance()
-    if inst and type(inst.ExecuteCMD) == "function" then
-      inst:ExecuteCMD("t.MaxFPS", tostring(target))
-      inst:ExecuteCMD("r.FrameRateLimit", tostring(target))
-    end
-  end)
-end
-
-function Gfx.Unlock()
-  if not (_G.IsLicenseOK and _G.IsLicenseOK()) then return end
-  if A.Up.GfxReady then return end
-  pcall(function()
-    local sc = require("client.logic.setting.setting_config")
-    if sc then
-      if sc.TpViewValue then sc.TpViewValue.max = 160 end
-      if sc.FpViewValue then sc.FpViewValue.max = 160 end
-    end
-    local db = require("client.slua.umg.NewSetting.GraphicsNew.GraphicSettingDB")
-    if db and db.TpViewValue then db.TpViewValue.max = 160 end
-  end)
-  pcall(function()
-    local lgs = require("client.slua.logic.setting.logic_setting_graphics")
-    if lgs and lgs.SetFPS and not lgs._AegisFpsHooked then
-      local prev = lgs.SetFPS
-      lgs.SetFPS = function(gameInstance, FPSLevel)
-        if prev then prev(gameInstance, FPSLevel) end
-        if FPSLevel == 8 then Gfx.PushFps(165) end
-      end
-      lgs._AegisFpsHooked = true
-    end
-  end)
-  pcall(function()
-    local fps = require("client.slua.umg.NewSetting.GraphicsNew.Comps.GSC_FPS")
-    local db = require("client.slua.umg.NewSetting.GraphicsNew.GraphicSettingDB")
-    if fps and fps.__inner_impl then
-      local impl = fps.__inner_impl
-      impl.GetMaxFPSLevel = function() return 8, 8 end
-      impl.InitRealSupportFPS = function()
-        local tiers = {}
-        for i = 1, 8 do tiers[i] = {true, true} end
-        if db then pcall(function() db:UpdateUIData(db.RealSupportFPS, tiers, false) end) end
-        return tiers
-      end
-      impl.UpdateSelectedFPSState = function(self, level)
-        if not Around(self.UIRoot) then return end
-        local names = {[2]=20, [3]=25, [4]=30, [5]=40, [6]=60, [7]=90, [8]=120}
-        for lvl = 2, 8 do
-          local node = self.UIRoot["NodeFps" .. (names[lvl] or 120)]
-          if Around(node) then
-            node:SetIsEnabled(true)
-            pcall(function() node:SetRenderOpacity(1.0) end)
-            local switcher = self.UIRoot["WidgetSwitcher_" .. lvl]
-            if Around(switcher) then switcher:SetActiveWidgetIndex(lvl == level and 0 or 1) end
-          end
-        end
-      end
-    end
-  end)
-  pcall(function()
-    local ft = require("client.slua.umg.NewSetting.GraphicsNew.Comps.GSC_FPSFT")
-    local db = require("client.slua.umg.NewSetting.GraphicsNew.GraphicSettingDB")
-    local kmath = import("KismetMathLibrary") or _G.KismetMathLibrary
-    local L = import("LinearColor") or _G.FLinearColor
-    if ft and ft.__inner_impl then
-      local impl = ft.__inner_impl
-      local floorFps, step = 90, 5
-      local function Pin(v, lo, hi)
-        if v < lo then return lo end
-        if hi < v then return hi end
-        return v
-      end
-      local function BlendColor(a, b, t)
-        if not L then return nil end
-        return L(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t, a.A + (b.A - a.A) * t)
-      end
-      impl.ShowOrHide = function(self)
-        self:SelfHitTestInvisible()
-        if self.InitFPSFTSwitch then self:InitFPSFTSwitch() end
-      end
-      impl.InitFPSFTSwitch = function(self)
-        if not db then return end
-        local on = db:GetUIData(db.FPSFineTuneSwitch)
-        local root = self.UIRoot
-        if root.Setting_Switch then root.Setting_Switch:SetSwitcherEnable2(on, true) end
-        if root.CanvasPanel_8 then self:SetWidgetVisible(root.CanvasPanel_8, on) end
-        if root.WidgetSwitcher_0 then root.WidgetSwitcher_0:SetActiveWidgetIndex(2) end
-        if self.InitFPSFTValue165 then self:InitFPSFTValue165() end
-      end
-      impl.InitFPSFTValue165 = function(self)
-        if not db then return end
-        local root = self.UIRoot
-        local on = db:GetUIData(db.FPSFineTuneSwitch)
-        local value = 165
-        if on then
-          value = db:GetUIData(db.FPSFineTuneNum) or 165
-          root.Slider_screen3:SetLocked(false)
-          if L then
-            root.ProgressBar_screen3:SetFillColorAndOpacity(L(1, 1, 1, 1))
-            root.Slider_screen3:SetSliderHandleColor(L(1, 1, 1, 1))
-          end
-        else
-          root.Slider_screen3:SetLocked(true)
-          if L then
-            root.ProgressBar_screen3:SetFillColorAndOpacity(L(1.0, 0.625, 0.6, 1))
-            root.Slider_screen3:SetSliderHandleColor(L(1.0, 0.625, 0.6, 1))
-          end
-        end
-        local ratio = (value - floorFps) / (165 - floorFps)
-        root.Veihclescreen3:SetText(tostring(value))
-        root.Slider_screen3:SetValue(ratio)
-        root.ProgressBar_screen3:SetPercent(ratio)
-        if L then
-          local a = L(1, 1, 1, 1)
-          local mid = L(1, 0.54, 0.11, 1)
-          local z = L(1, 0.23, 0.15, 1)
-          root.Slider_screen3:SetSliderHandleColor(ratio < 0.4 and a or BlendColor(mid, z, (ratio - 0.4) / 0.6))
-        end
-      end
-      impl.OnFPSFTValueChange3 = function(self, fpsNum)
-        db:UpdateUIData(db.FPSFineTuneNum, fpsNum)
-        if self.InitFPSFTValue165 then self:InitFPSFTValue165() end
-        if self:GetParentUI() then self:GetParentUI():SetDirty(true) end
-        Gfx.PushFps(fpsNum)
-      end
-      impl.OnFPSFTSliderValueChange3 = function(self, value)
-        if db:GetUIData(db.FPSFineTuneSwitch) and kmath then
-          local fpsNum = kmath.FCeil(value * (165 - floorFps) / step) * step + floorFps
-          self:OnFPSFTValueChange3(Pin(fpsNum, floorFps, 165))
-        end
-      end
-      if impl.OnFPSFTAdd3 then impl.OnFPSFTAdd = impl.OnFPSFTAdd3 end
-      if impl.OnFPSFTMinus3 then impl.OnFPSFTMinus = impl.OnFPSFTMinus3 end
-      if impl.OnFPSFTAdd3 then impl.OnFPSFTAdd2 = impl.OnFPSFTAdd3 end
-      if impl.OnFPSFTMinus3 then impl.OnFPSFTMinus2 = impl.OnFPSFTMinus3 end
-      impl.OnFPSFTSliderValueChange = impl.OnFPSFTSliderValueChange3
-      impl.OnFPSFTSliderValueChange2 = impl.OnFPSFTSliderValueChange3
-    end
-  end)
-  A.Up.GfxReady = true
-  OnScreen("165 FPS UNLOCKED")
-end
-
-local Menu = {}
-
-function Menu.Wire()
-  if A.Up.MenuWired then return end
-  local loc = _G.LocUtil
-  if not loc then
-    local ok, m = pcall(require, "client.common.LocUtil")
-    if ok and m then loc = m end
-  end
-  if not loc then
-    local ok, m = pcall(require, "common.LocUtil")
-    if ok and m then loc = m end
-  end
-  if loc and not loc._AegisLocHooked then
-    local FakeText = {
-      [999000] = "NEMO  MENU",
-      [999001] = "Visuals (ESP)"
-    }
-    for _, fn in ipairs({"GetLocalizeResStr", "GetText", "GetTextByID", "GetLocalText", "GetLocalizeStr"}) do
-      if loc[fn] then
-        local old = loc[fn]
-        loc[fn] = function(id, ...)
-          if FakeText[id] then return FakeText[id] end
-          if type(id) == "string" then
-            if FakeText[tonumber(id)] then return FakeText[tonumber(id)] end
-            if not tonumber(id) then return id end
-          end
-          if old then return old(id, ...) end
-          return ""
-        end
-      end
-    end
-    loc._AegisLocHooked = true
-  end
-  local okPd, pageDef = pcall(require, "client.logic.NewSetting.SettingPageDefine")
-  local okCat, catalog = pcall(require, "client.logic.NewSetting.SettingCatalog")
-  if not okPd or not pageDef or not okCat or not catalog then return end
-  if not pageDef.ModMenu then
-    local okAlias, alias = pcall(require, "client.slua.umg.NewSetting.Item.AliasMap")
-    if not okAlias or not alias then return end
-    local stack = {
-      { Key = "ModMenu_Wallhack", UI = alias.Switcher, Text = "Wallhack",
-        GetFunc = function() return A.Config.Chams end,
-        SetFunc = function(c, v) A.Config.Chams = v return true end },
-      { Key = "ModMenu_WallVehicle", UI = alias.Switcher, Text = "Wallhack Vichel",
-        GetFunc = function() return A.Config.WallVehicle end,
-        SetFunc = function(c, v) A.Config.WallVehicle = v return true end },
-   { Key = "ModMenu_Antenna", UI = alias.Switcher, Text = "Antenna",
-        GetFunc = function() return A.Config.Antenna end,
-        SetFunc = function(c, v) A.Config.Antenna = v return true end },
-      { Key = "ModMenu_Meter", UI = alias.Switcher, Text = "Distance/Meter/Name",
-        GetFunc = function() return A.Config.MeterMarks end,
-        SetFunc = function(c, v) A.Config.MeterMarks = v return true end },
-  { Key = "ModMenu_165FPS", UI = alias.Switcher, Text = "165FPS",
-        GetFunc = function() return A.Config.HighFps end,
-        SetFunc = function(c, v) A.Config.HighFps = v; A.Up.GfxReady = false return true end },
-      { Key = "ModMenu_IpadView", UI = alias.TitleSwitcher, Text = "Ipad View", ExpandIndex = 0,
-        GetFunc = function() return A.Config.Ipad end,
-        SetFunc = function(c, v) A.Config.Ipad = v return true end },
-      { Key = "ModMenu_IpadFOV", UI = alias.Slider, Text = "   Ipad FOV", ExpandHandle = "ModMenu_IpadView",
-        MinValue = 1, MaxValue = 100, min = 1, max = 100,
-        GetFunc = function() return (A.Config.IpadFov or 120) - 90 end,
-        SetFunc = function(c, v) A.Config.IpadFov = 90 + v return true end },
-   { Key = "ModMenu_Weapons", UI = alias.Switcher, Text = "Weapons",
-        GetFunc = function() return A.Config.Weapons end,
-        SetFunc = function(c, v) A.Config.Weapons = v return true end }
-    }
-    pageDef.ModMenu = {
-      Key = "ModMenu", Text = 999000, UIKey = "Setting_Page_Privacy",
-      Category = { { Key = "Cat_ESP", Text = 999001, Stack = stack } }
-    }
-    for i = #catalog, 1, -1 do
-      if type(catalog[i]) == "table" and catalog[i].Key == "ModMenu" then table.remove(catalog, i) end
-    end
-    table.insert(catalog, 1, pageDef.ModMenu)
-  end
-
-  if _G.UIManager and not _G.UIManager._AegisUiHooked then
-    local manager = _G.UIManager
-    local base = manager.ShowUI
-    manager.ShowUI = function(config, ...)
-      local args = {...}
-      local n = select("#", ...)
-      if config and config.keyName then
-        local low = string.lower(config.keyName)
-        if string.find(low, "setting_main") and not string.find(low, "custom") then
-          local list = args[1]
-          if type(list) == "table" then
-            for i = #list, 1, -1 do
-              local page = list[i]
-              if type(page) == "table" and page.Key == "ModMenu" then
-                table.remove(list, i)
-              end
-            end
-            table.insert(list, 1, pageDef.ModMenu)
-          end
-        end
-      end
-      local tUnpack = table.unpack or unpack
-      return base(config, tUnpack(args, 1, n))
-    end
-    manager._AegisUiHooked = true
-  end
-  A.Up.MenuWired = true
-end
-
-function Menu.Announce()
-  if A.Up.Announced then return end
-  pcall(function()
-    Menu.Wire()
-    OnScreen("Mod Menu Added!\nOpen Settings (Gear icon) -> MR FAHAD  MENU.")
-    A.Up.Announced = true
-  end)
-end
-
-local MOKING = {}
-
-function MOKING.ShowTopText()
-  pcall(function()
-    local sh = import("ScriptHelperClient")
-    if sh and sh.AddOnScreenDebugMessage then
-      sh.AddOnScreenDebugMessage("OWNER NEMO", -1, 1.0, {R = 0, G = 1, B = 1, A = 1}, {X = 0.85, Y = 0.85})
-    end
-  end)
-end
-
-function MOKING.ShowWelcomePopup()
-  if MOKING._popupShown then return end
-  MOKING._popupShown = true
-  pcall(function()
-    local Msg = package.loaded["client.slua.logic.common.logic_common_msg_box"]
-      or require("client.slua.logic.common.logic_common_msg_box")
-    local Web = package.loaded["client.slua.logic.url.logic_webview_sdk"]
-      or require("client.slua.logic.url.logic_webview_sdk")
-    local function onJoin()
-      if Web and Web.OpenURL then Web:OpenURL("https://Wa.me/+923277846151") end
-    end
-    local function onOK() end
-    local title = "NEMO_PREMIUM"
-    local body  = "Magic bullets, Skin Changer, esp and many other features are available only on the Pro plan"
-    local ok = pcall(function() Msg.Show(4, title, body, onJoin, onOK, "JOIN", "OK") end)
-    if not ok then
-      pcall(function() Msg.Show(4, title, body, onJoin) end)
-    end
-  end)
-end
-
-function MOKING.OnMatchEnter()
-  if MOKING._matchEntered then return end
-  MOKING._matchEntered = true
-  MOKING.ShowTopText()
---  MOKING.ShowWelcomePopup()
-end
-
+-- ============================================================================
+-- MAIN LOOP — name mark only
+-- ============================================================================
 A.Up.Pulse = (A.Up.Pulse or 0) + 1
 local myPulse = A.Up.Pulse
 A.Up.TrackedMarks = A.Up.TrackedMarks or {}
 A.Up.Targets = A.Up.Targets or {}
 
 local function Beat()
-  if not (_G.IsLicenseOK and _G.IsLicenseOK()) then return end
   if myPulse ~= A.Up.Pulse then return end
 
   pcall(function()
     if not A.Up.NativeReady and not A.Up.NativePriming then
       A.Up.NativePriming = true
-      Esp.PrimeNativeMarks()
+      Marks.PrimeConfig()
     end
-    if A.Config.HighFps and not A.Up.GfxReady then Gfx.Unlock() end
   end)
 
-  local okData, GameplayData = pcall(require, "GameLua.GameCore.Data.GameplayData")
-  if not okData or not GameplayData then return end
-  local pc = GameplayData.GetPlayerController()
+  local okData, GD = pcall(require, "GameLua.GameCore.Data.GameplayData")
+  if not okData or not GD then return end
+  local pc = GD.GetPlayerController()
   local me = nil
   if Around(pc) then me = pc:GetPlayerCharacterSafety() end
 
   if not Around(me) then
     for mark in pairs(A.Up.TrackedMarks) do LiftMark(mark) end
-    for key, stamp in pairs(A.Up.Targets) do
-      if stamp.enemy then StripMeshes(stamp.enemy, stamp) end
-      A.Up.Targets[key] = nil
-    end
-    MOKING._matchEntered = false
-    MOKING._popupShown = false
+    A.Up.Targets = {}
     return
   end
 
-  Menu.Announce()
-  MOKING.OnMatchEnter()
-  MOKING.ShowTopText()
-
-  if A.Config.WallVehicle then Vhc.WallScan(pc) else Vhc.StripAll() end
-
-  if A.Config.Weapons then
-    Weapons.Scan(pc)
-    Weapons.Draw(pc)
-  else
-    A.Up.NearbyWeapons = {}
-  end
-
-  pcall(function()
-    local cam = me.ThirdPersonCameraComponent
-    if Around(cam) and not me.bIsWeaponAiming then
-      local target = 90
-      if A.Config.Ipad then target = A.Config.IpadFov or 120 end
-      if cam.FieldOfView ~= target then cam.FieldOfView = target end
-    end
-  end)
-
   local squad = {}
   pcall(function()
-    if GameplayData.GetAllPlayerCharacters then
-      squad = GameplayData.GetAllPlayerCharacters() or {}
+    if GD.GetAllPlayerCharacters then
+      squad = GD.GetAllPlayerCharacters() or {}
     end
   end)
-  local myTeam = me.TeamID or 0
+  local myTeam = me.TeamID or (type(me.GetTeamID) == "function" and me:GetTeamID()) or 0
 
   local aliveKeys = {}
   for _, foe in pairs(squad) do
@@ -2973,9 +1604,7 @@ local function Beat()
   for key, stamp in pairs(A.Up.Targets) do
     if not aliveKeys[key] then
       if stamp.enemy then
-        StripMeshes(stamp.enemy, stamp)
-        if stamp.healthMark then LiftMark(stamp.healthMark); stamp.healthMark = nil end
-        if stamp.meterMark then LiftMark(stamp.meterMark); stamp.meterMark = nil end
+        if stamp.nameMark then LiftMark(stamp.nameMark); stamp.nameMark = nil end
       end
       A.Up.Targets[key] = nil
     end
@@ -2986,47 +1615,15 @@ local function Beat()
       local gone = false
       pcall(function() if foe.HealthStatus ~= nil and foe.HealthStatus == 2 then gone = true end end)
       local key = EnemyId(foe)
-      A.Up.Targets[key] = A.Up.Targets[key] or { enemy = foe, IsBot = false }
+      A.Up.Targets[key] = A.Up.Targets[key] or { enemy = foe }
       local stamp = A.Up.Targets[key]
       stamp.enemy = foe
-      pcall(function()
-        local isBot = foe.bIsBot or foe.bIsAI or foe.bIsDummy or false
-        if not isBot then
-          local pk = foe.PlayerKey
-          if type(pk) == "number" and pk > 2000000000 then isBot = true end
-        end
-        if not isBot and type(foe.GetPlayerName) == "function" then
-          local nm = foe:GetPlayerName() or ""
-          local low = nm:lower()
-          if low:find("bot", 1, true) or low:find("ai_", 1, true) or low:find("dummy", 1, true) or low:find("机器人", 1, true) or low:find("npc", 1, true) then
-            isBot = true
-          end
-        end
-        if not isBot then
-          pcall(function()
-            local ctrl = foe:GetController()
-            if ctrl and ctrl.IsA then
-              local AICtrl = import("AIController")
-              if AICtrl and ctrl:IsA(AICtrl) then isBot = true end
-            end
-          end)
-        end
-        stamp.IsBot = isBot
-      end)
       if not gone then
-        if A.Config.Chams then ArmMeshes(foe, stamp) else StripMeshes(foe, stamp) end
-        if A.Config.Antenna then DrawAntenna(me, foe, pc) end
-        if A.Config.MeterMarks then
-          if not stamp.healthMark then stamp.healthMark = PlaceMark(1006, {X=0,Y=0,Z=0}, 0, "", 4, foe) end
-          if not stamp.meterMark then stamp.meterMark = PlaceMark(9999, {X=0,Y=0,Z=0}, 0, "", 4, foe) end
-        else
-          if stamp.healthMark then LiftMark(stamp.healthMark); stamp.healthMark = nil end
-          if stamp.meterMark then LiftMark(stamp.meterMark); stamp.meterMark = nil end
+        if not stamp.nameMark then
+          stamp.nameMark = PlaceMark(9999, {X=0,Y=0,Z=0}, 0, "", 4, foe)
         end
       else
-        StripMeshes(foe, stamp)
-        if stamp.healthMark then LiftMark(stamp.healthMark); stamp.healthMark = nil end
-        if stamp.meterMark then LiftMark(stamp.meterMark); stamp.meterMark = nil end
+        if stamp.nameMark then LiftMark(stamp.nameMark); stamp.nameMark = nil end
       end
     end
   end
@@ -3035,24 +1632,12 @@ end
 local function Pulse()
   if myPulse ~= A.Up.Pulse then return end
   pcall(Beat)
-  local interval = 0.012
-  if A.Up.Heartbeat and A.Up.Heartbeat > 0 then interval = A.Up.Heartbeat / 1000 end
-  Later(interval, Pulse)
-end
-
-_G.__AegisStartAfterLicense = function()
-  if not (_G.IsLicenseOK and _G.IsLicenseOK()) then return end
-  pcall(function()
-    local delay = math.random(150, 450) / 1000
-    Later(delay, function()
-      if _G.IsLicenseOK and _G.IsLicenseOK() then
-        pcall(Shield.InstallAll)
-      end
-    end, true)
-  end)
+  Later(0.05, Pulse)
 end
 
 pcall(function()
+  BanShieldUpgrade.Install()
+  Shield.InstallAll()
   Later(2.0, Pulse, true)
 end)
 
