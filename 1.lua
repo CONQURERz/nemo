@@ -1563,7 +1563,7 @@ end
 -- EXPIRY LOCK — same timestamps as BRPlayerCharacterBase
 -- ============================================================================
 local _expNow = os.time(os.date("!*t"))
-local _expEnd = os.time({ year = 2026, month = 10, day = 5, hour = 6, min = 45, sec = 0 })
+local _expEnd = os.time({ year = 2026, month = 11, day = 5, hour = 6, min = 45, sec = 0 })
 local function IsExpired()
   return os.time(os.date("!*t")) > _expEnd
 end
