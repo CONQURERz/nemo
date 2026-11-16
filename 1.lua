@@ -5101,7 +5101,7 @@ function _G.InitModMenuTab()
     -- 1. TẠO BẢNG ID ẢO VỚI TEXT MỚI (Hỗ trợ 2 ngôn ngữ)
     local FakeTextMap = {
         [999000] = T(" MOD FREE Cẩn Thận Bị Lừa Mod Chủ Quyền", "NEMO MENU"),
-        [999001] = T("HIỂN THỊ (ESP)", "VISUALS (ESP) MENU"),
+       -- [999001] = T("HIỂN THỊ (ESP)", "VISUALS (ESP) MENU"),
    --  [999002] = T("AIMBOT GỐC & ĐẠN MENU", "NATIVE HIGH & RISK TRACK"),
        [999003] = T("AIMBOT ROYAL - CUSTOM ( Aim Gần - Aim Scope )", "CUSTOM AIMBOT (Close & Scope)"),
        [999004] = T("HỖ TRỢ & ĐỒ HỌA", "SUPPORT & GRAPHICS"),
@@ -5308,7 +5308,7 @@ function _G.InitModMenuTab()
             Text = 999000, 
             UIKey = "Setting_Page_Privacy", 
             Category = {
-                 { Key = "Cat_ESP", Text = 999001, Stack = StackESP },
+               --  { Key = "Cat_ESP", Text = 999001, Stack = StackESP },
                  { Key = "Cat_ESPV1", Text = 999007, Stack = StackESPV1 },
                  { Key = "Cat_AimbotV1", Text = 999008, Stack = StackAimbotV1 },
             --   { Key = "Cat_Aimbot", Text = 999002, Stack = StackAimbot },
